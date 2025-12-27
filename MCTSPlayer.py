@@ -6,13 +6,9 @@ class MCTSPlayer:
     """
     Implements MCTS to choose a move in ConnectFour.
 
-    - Uses make/unmake (single shared game state).
-    - Nodes store only stats and the move from parent (no cloned states).
-    - Result convention:
-        +1 = RED wins
-        -1 = YELLOW wins
-         0 = draw
-      (Matches ConnectFour.status in the provided implementation.)
+    Add-on (as requested):
+    If the AI is the first player (RED) and the board is empty,
+    the first move is always column 3 (the strongest opening move).
     """
 
     def __init__(self, exploration_c=1.41421356237, use_win_heuristic=True):
@@ -21,21 +17,37 @@ class MCTSPlayer:
 
     def choose_move(self, game, iterations):
         legal = game.legal_moves()
+
+        # Terminal or no legal moves
         if game.status != game.ONGOING or not legal:
             return None
 
-        # ---- Immediate win heuristic (safe with make/unmake) ----
+        # --------------------------------------------------
+        # FIXED OPENING: AI starts as RED -> always play center
+        # --------------------------------------------------
+        if game.player == game.RED and sum(game.heights) == 0:
+            return 3
+        # --------------------------------------------------
+
+        # Root player = who the AI is in THIS call
+        root_player = game.player
+        flip_for_root = (root_player == game.YELLOW)
+
+        # Heuristics: immediate win / immediate block
         if self.use_win_heuristic:
             for mv in legal:
                 if self._is_immediate_win(game, mv):
                     return mv
-        # --------------------------------------------------------
+
+            blocking_move = self._find_blocking_move(game, legal)
+            if blocking_move is not None:
+                return blocking_move
 
         root = MCTSNode(parent=None, move=None, untried_moves=legal)
 
         for _ in range(iterations):
             node = root
-            path_moves = []   # moves made during selection/expansion (to undo later)
+            path_moves = []
 
             # 1) Selection
             while game.status == game.ONGOING and node.is_fully_expanded() and node.children:
@@ -43,9 +55,12 @@ class MCTSPlayer:
                 game.make(node.move)
                 path_moves.append(node.move)
 
-            # Terminal during selection -> backprop only
+            # Terminal during selection
             if game.status != game.ONGOING:
-                self._backpropagate(node, game.status)
+                result = game.status
+                if flip_for_root:
+                    result = -result
+                self._backpropagate(node, result)
                 for mv in reversed(path_moves):
                     game.unmake(mv)
                 continue
@@ -60,25 +75,27 @@ class MCTSPlayer:
 
                 node = node.add_child(mv, game.legal_moves())
 
-            # 3) Simulation (rollout)
+            # 3) Simulation
             rollout_moves = []
             while game.status == game.ONGOING:
                 mv = self._rollout_policy(game)
                 game.make(mv)
                 rollout_moves.append(mv)
 
-            result = game.status  # +1 / -1 / 0
+            result = game.status
+            if flip_for_root:
+                result = -result
 
             # 4) Backpropagation
             self._backpropagate(node, result)
 
-            # Undo rollout, then undo selection/expansion path
+            # Undo
             for mv in reversed(rollout_moves):
                 game.unmake(mv)
             for mv in reversed(path_moves):
                 game.unmake(mv)
 
-        # Choose final move: highest visit count
+        # Final choice: highest visit count
         if not root.children:
             return random.choice(legal)
 
@@ -93,29 +110,53 @@ class MCTSPlayer:
     def _rollout_policy(self, game):
         legal = game.legal_moves()
 
-        # Optional heuristic in rollout: immediate win
         if self.use_win_heuristic:
             for mv in legal:
                 if self._is_immediate_win(game, mv):
                     return mv
 
+            block = self._find_blocking_move(game, legal)
+            if block is not None:
+                return block
+
         return random.choice(legal)
 
-    def _is_immediate_win(self, game, mv):
-        """
-        Safely checks if playing mv wins immediately for the current player,
-        without corrupting game state due to ConnectFour's terminal-move behavior.
+    def _find_blocking_move(self, game, legal_moves):
+        safe_moves = []
+        bad_moves_exist = False
 
-        Returns True/False and restores game state exactly.
-        """
+        for mv in legal_moves:
+            game.make(mv)
+
+            if game.status != game.ONGOING:
+                game.player = game.other(game.player)
+                game.unmake(mv)
+                continue
+
+            opponent_has_win = False
+            for opp_mv in game.legal_moves():
+                if self._is_immediate_win(game, opp_mv):
+                    opponent_has_win = True
+                    break
+
+            game.unmake(mv)
+
+            if opponent_has_win:
+                bad_moves_exist = True
+            else:
+                safe_moves.append(mv)
+
+        if bad_moves_exist and safe_moves:
+            return random.choice(safe_moves)
+
+        return None
+
+    def _is_immediate_win(self, game, mv):
         current_player = game.player
 
         game.make(mv)
         won_now = (game.status == current_player)
 
-        # If game became terminal (win/draw), ConnectFour.make() does NOT switch player.
-        # But ConnectFour.unmake() ALWAYS switches player.
-        # So we "align" player before unmake so that unmake restores correctly.
         if game.status != game.ONGOING and game.player == current_player:
             game.player = game.other(game.player)
 
