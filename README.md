@@ -1,7 +1,6 @@
 # 🧠 MCTS-Based Connect Four Player
 
 > A competitive Connect Four AI implemented using **Monte Carlo Tree Search (MCTS)**  
-> Designed for academic use and presented in a clean, professional GitHub format.
 
 ---
 
